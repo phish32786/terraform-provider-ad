@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 // schema is a high-level framework for easily writing new providers
 // for Terraform. Usage of schema is recommended over attempting to write
 // to the low-level plugin interfaces manually.
@@ -26,24 +23,17 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/terraform-plugin-log/tfsdklog"
 	"github.com/mitchellh/copystructure"
 	"github.com/mitchellh/mapstructure"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/logging"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
-// Schema describes the structure and type information of a value, whether
-// sourced from configuration, plan, or state data. Schema is used in Provider
-// and Resource types (for managed resources and data resources) and is
-// fundamental to the implementations of ResourceData and ResourceDiff.
+// Schema is used to describe the structure of a value.
 //
-// The Type field must always be set. At least one of Required, Optional,
-// Optional and Computed, or Computed must be enabled unless the Schema is
-// directly an implementation of an Elem field of another Schema.
+// Read the documentation of the struct elements for important details.
 type Schema struct {
 	// Type is the type of the value and must be one of the ValueType values.
 	//
@@ -81,33 +71,14 @@ type Schema struct {
 	// behavior, and SchemaConfigModeBlock is not permitted.
 	ConfigMode SchemaConfigMode
 
-	// Required indicates whether the practitioner must enter a value in the
-	// configuration for this attribute. Required cannot be used with Computed
-	// Default, DefaultFunc, DiffSuppressFunc, DiffSuppressOnRefresh,
-	// InputDefault, Optional, or StateFunc. At least one of Required,
-	// Optional, Optional and Computed, or Computed must be enabled.
-	Required bool
-
-	// Optional indicates whether the practitioner can choose to not enter
-	// a value in the configuration for this attribute. Optional cannot be used
-	// with Required.
-	Optional bool
-
-	// Computed indicates whether the provider may return its own value for
-	// this attribute or not. Computed cannot be used with Required. If
-	// Required and Optional are both false, the attribute will be considered
-	// "read only" for the practitioner, with only the provider able to set
-	// its value.
-	Computed bool
-
-	// ForceNew indicates whether a change in this value requires the
-	// replacement (destroy and create) of the managed resource instance,
-	// rather than an in-place update. This field is only valid when the
-	// encapsulating Resource is a managed resource.
+	// If one of these is set, then this item can come from the configuration.
+	// Both cannot be set. If Optional is set, the value is optional. If
+	// Required is set, the value is required.
 	//
-	// If conditional replacement logic is needed, use the Resource type
-	// CustomizeDiff field to call the ResourceDiff type ForceNew method.
-	ForceNew bool
+	// One of these must be set if the value is not computed. That is:
+	// value either comes from the config, is computed, or is both.
+	Optional bool
+	Required bool
 
 	// If this is non-nil, the provided function will be used during diff
 	// of this field. If this is nil, a default diff for the type of the
@@ -116,74 +87,31 @@ type Schema struct {
 	// This allows comparison based on something other than primitive, list
 	// or map equality - for example SSH public keys may be considered
 	// equivalent regardless of trailing whitespace.
-	//
-	// If CustomizeDiffFunc makes this field ForceNew=true, the
-	// following DiffSuppressFunc will come in with the value of old being
-	// empty, as if creating a new resource.
-	//
-	// By default, DiffSuppressFunc is considered only when deciding whether
-	// a configuration value is significantly different than the prior state
-	// value during planning. Set DiffSuppressOnRefresh to opt in to checking
-	// this also during the refresh step.
 	DiffSuppressFunc SchemaDiffSuppressFunc
 
-	// DiffSuppressOnRefresh enables using the DiffSuppressFunc to ignore
-	// normalization-classified changes returned by the resource type's
-	// "Read" or "ReadContext" function, in addition to the default behavior of
-	// doing so during planning.
+	// If this is non-nil, then this will be a default value that is used
+	// when this item is not set in the configuration.
 	//
-	// This is a particularly good choice for attributes which take strings
-	// containing "microsyntaxes" where various different values are packed
-	// together in some serialization where there are many ways to express the
-	// same information. For example, attributes which accept JSON data can
-	// include different whitespace characters without changing meaning, and
-	// case-insensitive identifiers may refer to the same object using different
-	// characters.
+	// DefaultFunc can be specified to compute a dynamic default.
+	// Only one of Default or DefaultFunc can be set. If DefaultFunc is
+	// used then its return value should be stable to avoid generating
+	// confusing/perpetual diffs.
 	//
-	// This is valid only for attributes of primitive types, because
-	// DiffSuppressFunc itself is only compatible with primitive types.
+	// Changing either Default or the return value of DefaultFunc can be
+	// a breaking change, especially if the attribute in question has
+	// ForceNew set. If a default needs to change to align with changing
+	// assumptions in an upstream API then it may be necessary to also use
+	// the MigrateState function on the resource to change the state to match,
+	// or have the Read function adjust the state value to align with the
+	// new default.
 	//
-	// The key benefit of activating this flag is that the result of Read or
-	// ReadContext will be cleaned of normalization-only changes in the same
-	// way as the planning result would normaly be, which therefore prevents
-	// churn for downstream expressions deriving from this attribute and
-	// prevents incorrect "Values changed outside of Terraform" messages
-	// when the remote API returns values which have the same meaning as the
-	// prior state but in a different serialization.
+	// If Required is true above, then Default cannot be set. DefaultFunc
+	// can be set with Required. If the DefaultFunc returns nil, then there
+	// will be no default and the user will be asked to fill it in.
 	//
-	// This is an opt-in because it was a later addition to the DiffSuppressFunc
-	// functionality which would cause some significant changes in behavior
-	// for existing providers if activated everywhere all at once.
-	DiffSuppressOnRefresh bool
-
-	// Default indicates a value to set if this attribute is not set in the
-	// configuration. Default cannot be used with DefaultFunc or Required.
-	// Default is only supported if the Type is TypeBool, TypeFloat, TypeInt,
-	// or TypeString. Default cannot be used if the Schema is directly an
-	// implementation of an Elem field of another Schema, such as trying to
-	// set a default value for a TypeList or TypeSet.
-	//
-	// Changing either Default can be a breaking change, especially if the
-	// attribute has ForceNew enabled. If a default needs to change to align
-	// with changing assumptions in an upstream API, then it may be necessary
-	// to also implement resource state upgrade functionality to change the
-	// state to match or update read operation logic to align with the new
-	// default.
-	Default interface{}
-
-	// DefaultFunc can be specified to compute a dynamic default when this
-	// attribute is not set in the configuration. DefaultFunc cannot be used
-	// with Default. For legacy reasons, DefaultFunc can be used with Required
-	// attributes in a Provider schema, which will prompt practitioners for
-	// input if the result of this function is nil.
-	//
-	// The return value should be stable to avoid generating confusing
-	// plan differences. Changing the return value can be a breaking change,
-	// especially if ForceNew is enabled. If a default needs to change to align
-	// with changing assumptions in an upstream API, then it may be necessary
-	// to also implement resource state upgrade functionality to change the
-	// state to match or update read operation logic to align with the new
-	// default.
+	// If either of these is set, then the user won't be asked for input
+	// for this key if the default is not nil.
+	Default     interface{}
 	DefaultFunc SchemaDefaultFunc
 
 	// Description is used as the description for docs, the language server and
@@ -196,147 +124,85 @@ type Schema struct {
 	// asked for. If Input is asked, this will be the default value offered.
 	InputDefault string
 
+	// The fields below relate to diffs.
+	//
+	// If Computed is true, then the result of this value is computed
+	// (unless specified by config) on creation.
+	//
+	// If ForceNew is true, then a change in this resource necessitates
+	// the creation of a new resource.
+	//
 	// StateFunc is a function called to change the value of this before
 	// storing it in the state (and likewise before comparing for diffs).
 	// The use for this is for example with large strings, you may want
 	// to simply store the hash of it.
+	Computed  bool
+	ForceNew  bool
 	StateFunc SchemaStateFunc
 
-	// Elem represents the element type for a TypeList, TypeSet, or TypeMap
-	// attribute or block. The only valid types are *Schema and *Resource.
-	// Only TypeList and TypeSet support *Resource.
+	// The following fields are only set for a TypeList, TypeSet, or TypeMap.
 	//
-	// If the Elem is a *Schema, the surrounding Schema represents a single
-	// attribute with a single element type for underlying elements. In
-	// practitioner configurations, an equals sign (=) is required to set
-	// the value. Refer to the following documentation:
-	//
-	//   https://www.terraform.io/docs/language/syntax/configuration.html
-	//
-	// The underlying *Schema is only required to implement Type. ValidateFunc
-	// or ValidateDiagFunc can be used to validate each element value.
-	//
-	// If the Elem is a *Resource, the surrounding Schema represents a
-	// configuration block. Blocks can contain underlying attributes or blocks.
-	// In practitioner configurations, an equals sign (=) cannot be used to
-	// set the value. Blocks are instead repeated as necessary, or require
-	// the use of dynamic block expressions. Refer to the following
-	// documentation:
-	//
-	//   https://www.terraform.io/docs/language/syntax/configuration.html
-	//   https://www.terraform.io/docs/language/expressions/dynamic-blocks.html
-	//
-	// The underlying *Resource must only implement the Schema field.
+	// Elem represents the element type. For a TypeMap, it must be a *Schema
+	// with a Type that is one of the primitives: TypeString, TypeBool,
+	// TypeInt, or TypeFloat. Otherwise it may be either a *Schema or a
+	// *Resource. If it is *Schema, the element type is just a simple value.
+	// If it is *Resource, the element type is a complex structure,
+	// potentially managed via its own CRUD actions on the API.
 	Elem interface{}
 
+	// The following fields are only set for a TypeList or TypeSet.
+	//
 	// MaxItems defines a maximum amount of items that can exist within a
-	// TypeSet or TypeList.
-	MaxItems int
-
+	// TypeSet or TypeList. Specific use cases would be if a TypeSet is being
+	// used to wrap a complex structure, however more than one instance would
+	// cause instability.
+	//
 	// MinItems defines a minimum amount of items that can exist within a
-	// TypeSet or TypeList.
+	// TypeSet or TypeList. Specific use cases would be if a TypeSet is being
+	// used to wrap a complex structure, however less than one instance would
+	// cause instability.
 	//
 	// If the field Optional is set to true then MinItems is ignored and thus
 	// effectively zero.
+	MaxItems int
 	MinItems int
 
-	// Set defines custom hash algorithm for each TypeSet element. If not
-	// defined, the SDK implements a default hash algorithm based on the
-	// underlying structure and type information of the Elem field.
+	// The following fields are only valid for a TypeSet type.
+	//
+	// Set defines a function to determine the unique ID of an item so that
+	// a proper set can be built.
 	Set SchemaSetFunc
 
 	// ComputedWhen is a set of queries on the configuration. Whenever any
 	// of these things is changed, it will require a recompute (this requires
 	// that Computed is set to true).
 	//
-	// Deprecated: This functionality is not implemented and this field
-	// declaration should be removed.
+	// NOTE: This currently does not work.
 	ComputedWhen []string
 
-	// ConflictsWith is a set of attribute paths, including this attribute,
-	// whose configurations cannot be set simultaneously. This implements the
-	// validation logic declaratively within the schema and can trigger earlier
-	// in Terraform operations, rather than using create or update logic which
-	// only triggers during apply.
+	// ConflictsWith is a set of schema keys that conflict with this schema.
+	// This will only check that they're set in the _config_. This will not
+	// raise an error for a malfunctioning resource that sets a conflicting
+	// key.
 	//
-	// Only absolute attribute paths, ones starting with top level attribute
-	// names, are supported. Attribute paths cannot be accurately declared
-	// for TypeList (if MaxItems is greater than 1), TypeMap, or TypeSet
-	// attributes. To reference an attribute under a single configuration block
-	// (TypeList with Elem of *Resource and MaxItems of 1), the syntax is
-	// "parent_block_name.0.child_attribute_name".
+	// ExactlyOneOf is a set of schema keys that, when set, only one of the
+	// keys in that list can be specified. It will error if none are
+	// specified as well.
+	//
+	// AtLeastOneOf is a set of schema keys that, when set, at least one of
+	// the keys in that list must be specified.
+	//
+	// RequiredWith is a set of schema keys that must be set simultaneously.
 	ConflictsWith []string
+	ExactlyOneOf  []string
+	AtLeastOneOf  []string
+	RequiredWith  []string
 
-	// ExactlyOneOf is a set of attribute paths, including this attribute,
-	// where only one attribute out of all specified can be configured. It will
-	// return a validation error if none are specified as well. This implements
-	// the validation logic declaratively within the schema and can trigger
-	// earlier in Terraform operations, rather than using create or update
-	// logic which only triggers during apply.
+	// When Deprecated is set, this attribute is deprecated.
 	//
-	// Only absolute attribute paths, ones starting with top level attribute
-	// names, are supported. Attribute paths cannot be accurately declared
-	// for TypeList (if MaxItems is greater than 1), TypeMap, or TypeSet
-	// attributes. To reference an attribute under a single configuration block
-	// (TypeList with Elem of *Resource and MaxItems of 1), the syntax is
-	// "parent_block_name.0.child_attribute_name".
-	ExactlyOneOf []string
-
-	// AtLeastOneOf is a set of attribute paths, including this attribute,
-	// in which at least one of the attributes must be configured. This
-	// implements the validation logic declaratively within the schema and can
-	// trigger earlier in Terraform operations, rather than using create or
-	// update logic which only triggers during apply.
-	//
-	// Only absolute attribute paths, ones starting with top level attribute
-	// names, are supported. Attribute paths cannot be accurately declared
-	// for TypeList (if MaxItems is greater than 1), TypeMap, or TypeSet
-	// attributes. To reference an attribute under a single configuration block
-	// (TypeList with Elem of *Resource and MaxItems of 1), the syntax is
-	// "parent_block_name.0.child_attribute_name".
-	AtLeastOneOf []string
-
-	// RequiredWith is a set of attribute paths, including this attribute,
-	// that must be set simultaneously. This implements the validation logic
-	// declaratively within the schema and can trigger earlier in Terraform
-	// operations, rather than using create or update logic which only triggers
-	// during apply.
-	//
-	// Only absolute attribute paths, ones starting with top level attribute
-	// names, are supported. Attribute paths cannot be accurately declared
-	// for TypeList (if MaxItems is greater than 1), TypeMap, or TypeSet
-	// attributes. To reference an attribute under a single configuration block
-	// (TypeList with Elem of *Resource and MaxItems of 1), the syntax is
-	// "parent_block_name.0.child_attribute_name".
-	RequiredWith []string
-
-	// Deprecated defines warning diagnostic details to display when
-	// practitioner configurations use this attribute or block. The warning
-	// diagnostic summary is automatically set to "Argument is deprecated"
-	// along with configuration source file and line information.
-	//
-	// Set this field to a practitioner actionable message such as:
-	//
-	//  - "Configure other_attribute instead. This attribute will be removed
-	//    in the next major version of the provider."
-	//  - "Remove this attribute's configuration as it no longer is used and
-	//    the attribute will be removed in the next major version of the
-	//    provider."
-	//
-	// In Terraform 1.2.7 and later, this warning diagnostic is displayed any
-	// time a practitioner attempts to configure a known value for this
-	// attribute and certain scenarios where this attribute is referenced.
-	//
-	// In Terraform 1.2.6 and earlier, this warning diagnostic is only
-	// displayed when the attribute is Required or Optional, and if the
-	// practitioner configuration attempts to set the attribute value to a
-	// known value. It cannot detect practitioner configuration values that
-	// are unknown ("known after apply").
-	//
-	// Additional information about deprecation enhancements for read-only
-	// attributes can be found in:
-	//
-	//  - https://github.com/hashicorp/terraform/issues/7569
+	// A deprecated field still works, but will probably stop working in near
+	// future. This string is the message shown to the user with instructions on
+	// how to address the deprecation.
 	Deprecated string
 
 	// ValidateFunc allows individual fields to define arbitrary validation
@@ -372,28 +238,9 @@ type Schema struct {
 	ValidateDiagFunc SchemaValidateDiagFunc
 
 	// Sensitive ensures that the attribute's value does not get displayed in
-	// the Terraform user interface output. It should be used for password or
-	// other values which should be hidden.
-	//
-	// Terraform does not support conditional sensitivity, so if the value may
-	// only be sensitive in certain scenarios, a pragmatic choice will be
-	// necessary upfront of whether or not to always hide the value. Some
-	// providers may opt to split up resources based on sensitivity, to ensure
-	// that practitioners without sensitive values do not have values
-	// unnecessarily hidden.
-	//
-	// Terraform does not support passing sensitivity from configurations to
-	// providers. For example, if a sensitive value is configured via another
-	// attribute, this attribute is not marked Sensitive, and the value is used
-	// in this attribute value, the sensitivity is not transitive. The value
-	// will be displayed as normal.
-	//
-	// Sensitive values propagate when referenced in other parts of a
-	// configuration unless the nonsensitive() configuration function is used.
-	// Certain configuration usage may also expand the sensitivity. For
-	// example, including the sensitive value in a set may mark the whole set
-	// as sensitive. Any outputs containing a sensitive value must enable the
-	// output sensitive argument.
+	// logs or regular output. It should be used for passwords or other
+	// secret fields. Future versions of Terraform may encrypt these
+	// values.
 	Sensitive bool
 }
 
@@ -413,7 +260,7 @@ const (
 // suppress it from the plan if necessary.
 //
 // Return true if the diff should be suppressed, false to retain it.
-type SchemaDiffSuppressFunc func(k, oldValue, newValue string, d *ResourceData) bool
+type SchemaDiffSuppressFunc func(k, old, new string, d *ResourceData) bool
 
 // SchemaDefaultFunc is a function called to return a default value for
 // a field.
@@ -640,11 +487,11 @@ func (m schemaMap) Data(
 // DeepCopy returns a copy of this schemaMap. The copy can be safely modified
 // without affecting the original.
 func (m *schemaMap) DeepCopy() schemaMap {
-	copiedMap, err := copystructure.Config{Lock: true}.Copy(m)
+	copy, err := copystructure.Config{Lock: true}.Copy(m)
 	if err != nil {
 		panic(err)
 	}
-	return *copiedMap.(*schemaMap)
+	return *copy.(*schemaMap)
 }
 
 // Diff returns the diff for a resource given the schema map,
@@ -662,9 +509,6 @@ func (m schemaMap) Diff(
 	// Make sure to mark if the resource is tainted
 	if s != nil {
 		result.DestroyTainted = s.Tainted
-		result.RawConfig = s.RawConfig
-		result.RawState = s.RawState
-		result.RawPlan = s.RawPlan
 	}
 
 	d := &ResourceData{
@@ -675,7 +519,7 @@ func (m schemaMap) Diff(
 	}
 
 	for k, schema := range m {
-		err := m.diff(ctx, k, schema, result, d, false)
+		err := m.diff(k, schema, result, d, false)
 		if err != nil {
 			return nil, err
 		}
@@ -693,16 +537,11 @@ func (m schemaMap) Diff(
 	if !result.DestroyTainted && customizeDiff != nil {
 		mc := m.DeepCopy()
 		rd := newResourceDiff(mc, c, s, result)
-
-		logging.HelperSchemaTrace(ctx, "Calling downstream")
-		err := customizeDiff(ctx, rd, meta)
-		logging.HelperSchemaTrace(ctx, "Called downstream")
-
-		if err != nil {
+		if err := customizeDiff(ctx, rd, meta); err != nil {
 			return nil, err
 		}
 		for _, k := range rd.UpdatedKeys() {
-			err := m.diff(ctx, k, mc[k], result, rd, false)
+			err := m.diff(k, mc[k], result, rd, false)
 			if err != nil {
 				return nil, err
 			}
@@ -721,9 +560,6 @@ func (m schemaMap) Diff(
 
 			// Preserve the DestroyTainted flag
 			result2.DestroyTainted = result.DestroyTainted
-			result2.RawConfig = result.RawConfig
-			result2.RawPlan = result.RawPlan
-			result2.RawState = result.RawState
 
 			// Reset the data to not contain state. We have to call init()
 			// again in order to reset the FieldReaders.
@@ -732,7 +568,7 @@ func (m schemaMap) Diff(
 
 			// Perform the diff again
 			for k, schema := range m {
-				err := m.diff(ctx, k, schema, result2, d, false)
+				err := m.diff(k, schema, result2, d, false)
 				if err != nil {
 					return nil, err
 				}
@@ -746,7 +582,7 @@ func (m schemaMap) Diff(
 					return nil, err
 				}
 				for _, k := range rd.UpdatedKeys() {
-					err := m.diff(ctx, k, mc[k], result2, rd, false)
+					err := m.diff(k, mc[k], result2, rd, false)
 					if err != nil {
 						return nil, err
 					}
@@ -918,10 +754,6 @@ func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) erro
 			}
 		}
 
-		if v.DiffSuppressOnRefresh && v.DiffSuppressFunc == nil {
-			return fmt.Errorf("%s: cannot set DiffSuppressOnRefresh without DiffSuppressFunc", k)
-		}
-
 		if v.Type == TypeList || v.Type == TypeSet {
 			if v.Elem == nil {
 				return fmt.Errorf("%s: Elem must be set for lists", k)
@@ -939,7 +771,7 @@ func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) erro
 			case *Resource:
 				attrsOnly := attrsOnly || v.ConfigMode == SchemaConfigModeAttr
 
-				if err := schemaMap(t.SchemaMap()).internalValidate(topSchemaMap, attrsOnly); err != nil {
+				if err := schemaMap(t.Schema).internalValidate(topSchemaMap, attrsOnly); err != nil {
 					return err
 				}
 			case *Schema:
@@ -1069,7 +901,7 @@ func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap
 				return fmt.Errorf("%s configuration block reference (%s) can only be used with TypeList and MaxItems: 1 configuration blocks", k, key)
 			}
 
-			sm = subResource.SchemaMap()
+			sm = schemaMap(subResource.Schema)
 		}
 
 		if target == nil {
@@ -1092,10 +924,9 @@ func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap
 	return nil
 }
 
-var validFieldNameRe = regexp.MustCompile("^[a-z0-9_]+$")
-
 func isValidFieldName(name string) bool {
-	return validFieldNameRe.MatchString(name)
+	re := regexp.MustCompile("^[a-z0-9_]+$")
+	return re.MatchString(name)
 }
 
 // resourceDiffer is an interface that is used by the private diff functions.
@@ -1107,12 +938,10 @@ type resourceDiffer interface {
 	GetChange(string) (interface{}, interface{})
 	GetOk(string) (interface{}, bool)
 	HasChange(string) bool
-	HasChanges(...string) bool
 	Id() string
 }
 
 func (m schemaMap) diff(
-	ctx context.Context,
 	k string,
 	schema *Schema,
 	diff *terraform.InstanceDiff,
@@ -1127,11 +956,11 @@ func (m schemaMap) diff(
 	case TypeBool, TypeInt, TypeFloat, TypeString:
 		err = m.diffString(k, schema, unsupressedDiff, d, all)
 	case TypeList:
-		err = m.diffList(ctx, k, schema, unsupressedDiff, d, all)
+		err = m.diffList(k, schema, unsupressedDiff, d, all)
 	case TypeMap:
 		err = m.diffMap(k, schema, unsupressedDiff, d, all)
 	case TypeSet:
-		err = m.diffSet(ctx, k, schema, unsupressedDiff, d, all)
+		err = m.diffSet(k, schema, unsupressedDiff, d, all)
 	default:
 		err = fmt.Errorf("%s: unknown type %#v", k, schema.Type)
 	}
@@ -1148,7 +977,6 @@ func (m schemaMap) diff(
 					continue
 				}
 
-				logging.HelperSchemaDebug(ctx, "Ignoring change due to DiffSuppressFunc", map[string]interface{}{logging.KeyAttributePath: attrK})
 				attrV = &terraform.ResourceAttrDiff{
 					Old: attrV.Old,
 					New: attrV.Old,
@@ -1162,7 +990,6 @@ func (m schemaMap) diff(
 }
 
 func (m schemaMap) diffList(
-	ctx context.Context,
 	k string,
 	schema *Schema,
 	diff *terraform.InstanceDiff,
@@ -1259,9 +1086,9 @@ func (m schemaMap) diffList(
 	case *Resource:
 		// This is a complex resource
 		for i := 0; i < maxLen; i++ {
-			for k2, schema := range t.SchemaMap() {
+			for k2, schema := range t.Schema {
 				subK := fmt.Sprintf("%s.%d.%s", k, i, k2)
-				err := m.diff(ctx, subK, schema, diff, d, all)
+				err := m.diff(subK, schema, diff, d, all)
 				if err != nil {
 					return err
 				}
@@ -1277,7 +1104,7 @@ func (m schemaMap) diffList(
 		// just diff each.
 		for i := 0; i < maxLen; i++ {
 			subK := fmt.Sprintf("%s.%d", k, i)
-			err := m.diff(ctx, subK, &t2, diff, d, all)
+			err := m.diff(subK, &t2, diff, d, all)
 			if err != nil {
 				return err
 			}
@@ -1402,7 +1229,6 @@ func (m schemaMap) diffMap(
 }
 
 func (m schemaMap) diffSet(
-	ctx context.Context,
 	k string,
 	schema *Schema,
 	diff *terraform.InstanceDiff,
@@ -1506,9 +1332,9 @@ func (m schemaMap) diffSet(
 			switch t := schema.Elem.(type) {
 			case *Resource:
 				// This is a complex resource
-				for k2, schema := range t.SchemaMap() {
+				for k2, schema := range t.Schema {
 					subK := fmt.Sprintf("%s.%s.%s", k, code, k2)
-					err := m.diff(ctx, subK, schema, diff, d, true)
+					err := m.diff(subK, schema, diff, d, true)
 					if err != nil {
 						return err
 					}
@@ -1522,7 +1348,7 @@ func (m schemaMap) diffSet(
 				// This is just a primitive element, so go through each and
 				// just diff each.
 				subK := fmt.Sprintf("%s.%s", k, code)
-				err := m.diff(ctx, subK, &t2, diff, d, true)
+				err := m.diff(subK, &t2, diff, d, true)
 				if err != nil {
 					return err
 				}
@@ -1597,60 +1423,6 @@ func (m schemaMap) diffString(
 	return nil
 }
 
-// handleDiffSuppressOnRefresh visits each of the attributes set in "new" and,
-// if the corresponding schema sets both DiffSuppressFunc and
-// DiffSuppressOnRefresh, checks whether the new value is materially different
-// than the old and if not it overwrites the new value with the old one,
-// in-place.
-func (m schemaMap) handleDiffSuppressOnRefresh(ctx context.Context, oldState, newState *terraform.InstanceState) {
-	if newState == nil || oldState == nil {
-		return // nothing to do, then
-	}
-
-	// We'll populate this in the loop below only if we find at least one
-	// attribute which needs this analysis.
-	var d *ResourceData
-
-	oldAttrs := oldState.Attributes
-	newAttrs := newState.Attributes
-	for k, newV := range newAttrs {
-		oldV, ok := oldAttrs[k]
-		if !ok {
-			continue // no old value to compare with
-		}
-		if newV == oldV {
-			continue // no change to test
-		}
-
-		schemaList := addrToSchema(strings.Split(k, "."), m)
-		if len(schemaList) == 0 {
-			continue // no schema? weird, but not our responsibility to handle
-		}
-		schema := schemaList[len(schemaList)-1]
-		if !schema.DiffSuppressOnRefresh || schema.DiffSuppressFunc == nil {
-			continue // not relevant
-		}
-
-		if d == nil {
-			// We populate "d" only on demand, to avoid the cost for most
-			// existing schemas where DiffSuppressOnRefresh won't be set.
-			var err error
-			d, err = m.Data(newState, nil)
-			if err != nil {
-				// Should not happen if we got far enough to be doing this
-				// analysis, but if it does then we'll bail out.
-				tfsdklog.Warn(ctx, fmt.Sprintf("schemaMap.handleDiffSuppressOnRefresh failed to construct ResourceData: %s", err))
-				return
-			}
-		}
-
-		if schema.DiffSuppressFunc(k, oldV, newV, d) {
-			tfsdklog.Debug(ctx, fmt.Sprintf("ignoring change of %q due to DiffSuppressFunc", k))
-			newState.Attributes[k] = oldV // keep the old value, then
-		}
-	}
-}
-
 func (m schemaMap) validate(
 	k string,
 	schema *Schema,
@@ -1667,7 +1439,7 @@ func (m schemaMap) validate(
 		if err != nil {
 			return append(diags, diag.Diagnostic{
 				Severity:      diag.Error,
-				Summary:       "Failed to determine default value",
+				Summary:       "Loading Default",
 				Detail:        err.Error(),
 				AttributePath: path,
 			})
@@ -1681,7 +1453,7 @@ func (m schemaMap) validate(
 	if err != nil {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Invalid combination of arguments",
+			Summary:       "ExactlyOne",
 			Detail:        err.Error(),
 			AttributePath: path,
 		})
@@ -1691,7 +1463,7 @@ func (m schemaMap) validate(
 	if err != nil {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Missing required argument",
+			Summary:       "AtLeastOne",
 			Detail:        err.Error(),
 			AttributePath: path,
 		})
@@ -1713,8 +1485,8 @@ func (m schemaMap) validate(
 		// This is a computed-only field
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Value for unconfigurable attribute",
-			Detail:        fmt.Sprintf("Can't configure a value for %q: its value will be decided automatically based on the result of applying this configuration.", k),
+			Summary:       "Computed attributes cannot be set",
+			Detail:        fmt.Sprintf("Computed attributes cannot be set, but a value was set for %q.", k),
 			AttributePath: path,
 		})
 	}
@@ -1723,7 +1495,7 @@ func (m schemaMap) validate(
 	if err != nil {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Missing required argument",
+			Summary:       "RequiredWith",
 			Detail:        err.Error(),
 			AttributePath: path,
 		})
@@ -1735,14 +1507,22 @@ func (m schemaMap) validate(
 	// The SDK has to allow the unknown value through initially, so that
 	// Required fields set via an interpolated value are accepted.
 	if !isWhollyKnown(raw) {
-		return nil
+		if schema.Deprecated != "" {
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Warning,
+				Summary:       "Attribute is deprecated",
+				Detail:        schema.Deprecated,
+				AttributePath: path,
+			})
+		}
+		return diags
 	}
 
 	err = validateConflictingAttributes(k, schema, c)
 	if err != nil {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Conflicting configuration arguments",
+			Summary:       "ConflictsWith",
 			Detail:        err.Error(),
 			AttributePath: path,
 		})
@@ -1919,7 +1699,7 @@ func (m schemaMap) validateList(
 	if rawV.Kind() != reflect.Slice {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Attribute must be a list",
+			Summary:       "Attribute should be a list",
 			AttributePath: path,
 		})
 	}
@@ -1937,8 +1717,8 @@ func (m schemaMap) validateList(
 	if schema.MaxItems > 0 && rawV.Len() > schema.MaxItems {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Too many list items",
-			Detail:        fmt.Sprintf("Attribute %s supports %d item maximum, but config has %d declared.", k, schema.MaxItems, rawV.Len()),
+			Summary:       "List longer than MaxItems",
+			Detail:        fmt.Sprintf("Attribute supports %d item maximum, config has %d declared", schema.MaxItems, rawV.Len()),
 			AttributePath: path,
 		})
 	}
@@ -1946,8 +1726,8 @@ func (m schemaMap) validateList(
 	if schema.MinItems > 0 && rawV.Len() < schema.MinItems {
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Not enough list items",
-			Detail:        fmt.Sprintf("Attribute %s requires %d item minimum, but config has only %d declared.", k, schema.MinItems, rawV.Len()),
+			Summary:       "List shorter than MinItems",
+			Detail:        fmt.Sprintf("Attribute supports %d item minimum, config has %d declared", schema.MinItems, rawV.Len()),
 			AttributePath: path,
 		})
 	}
@@ -1973,7 +1753,7 @@ func (m schemaMap) validateList(
 		switch t := schema.Elem.(type) {
 		case *Resource:
 			// This is a sub-resource
-			diags = append(diags, m.validateObject(key, t.SchemaMap(), c, p)...)
+			diags = append(diags, m.validateObject(key, t.Schema, c, p)...)
 		case *Schema:
 			diags = append(diags, m.validateType(key, raw, t, c, p)...)
 		}
@@ -2014,7 +1794,7 @@ func (m schemaMap) validateMap(
 		if reifiedOk && raw == reified && !c.IsComputed(k) {
 			return append(diags, diag.Diagnostic{
 				Severity:      diag.Error,
-				Summary:       "Attribute must be a map",
+				Summary:       "Attribute should be a map",
 				AttributePath: path,
 			})
 		}
@@ -2025,7 +1805,7 @@ func (m schemaMap) validateMap(
 	default:
 		return append(diags, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Attribute must be a map",
+			Summary:       "Attribute should be a map",
 			AttributePath: path,
 		})
 	}
@@ -2052,7 +1832,7 @@ func (m schemaMap) validateMap(
 		if v.Kind() != reflect.Map {
 			return append(diags, diag.Diagnostic{
 				Severity:      diag.Error,
-				Summary:       "Attribute must be a map",
+				Summary:       "Attribute should be a map",
 				AttributePath: path,
 			})
 		}
@@ -2126,7 +1906,7 @@ func validateMapValues(k string, m map[string]interface{}, schema *Schema, path 
 				})
 			}
 		default:
-			panic(fmt.Sprintf("Unknown validation type: %#v", valueType))
+			panic(fmt.Sprintf("Unknown validation type: %#v", schema.Type))
 		}
 	}
 	return diags
@@ -2265,19 +2045,8 @@ func (m schemaMap) validatePrimitive(
 		// decode a float as an integer.
 
 		// the config shims only use int for integral number values
-		// also accept a string, just as the TypeBool and TypeFloat cases do
 		if v, ok := raw.(int); ok {
 			decoded = v
-		} else if _, ok := raw.(string); ok {
-			var n int
-			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return append(diags, diag.Diagnostic{
-					Severity:      diag.Error,
-					Summary:       err.Error(),
-					AttributePath: path,
-				})
-			}
-			decoded = n
 		} else {
 			return append(diags, diag.Diagnostic{
 				Severity:      diag.Error,
@@ -2286,7 +2055,7 @@ func (m schemaMap) validatePrimitive(
 			})
 		}
 	case TypeFloat:
-		// Verify that we can parse this as a float
+		// Verify that we can parse this as an int
 		var n float64
 		if err := mapstructure.WeakDecode(raw, &n); err != nil {
 			return append(diags, diag.Diagnostic{
@@ -2329,11 +2098,9 @@ func (m schemaMap) validateType(
 		// indexing into sets is not representable in the current protocol
 		// best we can do is associate the path up to this attribute.
 		diags = m.validateList(k, raw, schema, c, path)
-		if len(diags) > 0 {
-			log.Printf("[WARN] Truncating attribute path of %d diagnostics for TypeSet", len(diags))
-			for i := range diags {
-				diags[i].AttributePath = path
-			}
+		log.Printf("[WARN] Truncating attribute path of %d diagnostics for TypeSet", len(diags))
+		for i := range diags {
+			diags[i].AttributePath = path
 		}
 	case TypeMap:
 		diags = m.validateMap(k, raw, schema, c, path)
@@ -2344,7 +2111,7 @@ func (m schemaMap) validateType(
 	if schema.Deprecated != "" {
 		diags = append(diags, diag.Diagnostic{
 			Severity:      diag.Warning,
-			Summary:       "Argument is deprecated",
+			Summary:       "Deprecated Attribute",
 			Detail:        schema.Deprecated,
 			AttributePath: path,
 		})

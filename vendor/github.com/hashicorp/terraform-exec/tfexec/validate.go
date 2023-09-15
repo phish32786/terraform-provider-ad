@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package tfexec
 
 import (
@@ -22,8 +19,8 @@ func (tf *Terraform) Validate(ctx context.Context) (*tfjson.ValidateOutput, erro
 
 	cmd := tf.buildTerraformCmd(ctx, nil, "validate", "-no-color", "-json")
 
-	var outBuf = bytes.Buffer{}
-	cmd.Stdout = &outBuf
+	var outbuf = bytes.Buffer{}
+	cmd.Stdout = &outbuf
 
 	err = tf.runTerraformCmd(ctx, cmd)
 	// TODO: this command should not exit 1 if you pass -json as its hard to differentiate other errors
@@ -33,7 +30,7 @@ func (tf *Terraform) Validate(ctx context.Context) (*tfjson.ValidateOutput, erro
 
 	var ret tfjson.ValidateOutput
 	// TODO: ret.UseJSONNumber(true) validate output should support JSON numbers
-	jsonErr := json.Unmarshal(outBuf.Bytes(), &ret)
+	jsonErr := json.Unmarshal(outbuf.Bytes(), &ret)
 	if jsonErr != nil {
 		// the original call was possibly bad, if it has an error, actually just return that
 		if err != nil {

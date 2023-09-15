@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package plugin
 
 import (
@@ -166,7 +163,7 @@ func TestPluginGRPCConn(t testing.T, ps map[string]Plugin) (*GRPCClient, *GRPCSe
 	}
 
 	brokerGRPCClient := newGRPCBrokerClient(conn)
-	broker := newGRPCBroker(brokerGRPCClient, nil, UnixSocketConfig{}, nil)
+	broker := newGRPCBroker(brokerGRPCClient, nil)
 	go broker.Run()
 	go brokerGRPCClient.StartStream()
 

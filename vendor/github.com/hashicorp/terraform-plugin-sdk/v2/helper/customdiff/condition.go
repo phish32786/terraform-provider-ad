@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package customdiff
 
 import (
@@ -15,7 +12,7 @@ type ResourceConditionFunc func(ctx context.Context, d *schema.ResourceDiff, met
 
 // ValueChangeConditionFunc is a function type that makes a boolean decision
 // by comparing two values.
-type ValueChangeConditionFunc func(ctx context.Context, oldValue, newValue, meta interface{}) bool
+type ValueChangeConditionFunc func(ctx context.Context, old, new, meta interface{}) bool
 
 // ValueConditionFunc is a function type that makes a boolean decision based
 // on a given value.
@@ -44,8 +41,8 @@ func If(cond ResourceConditionFunc, f schema.CustomizeDiffFunc) schema.Customize
 // given CustomizeDiffFunc only if the condition function returns true.
 func IfValueChange(key string, cond ValueChangeConditionFunc, f schema.CustomizeDiffFunc) schema.CustomizeDiffFunc {
 	return func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
-		oldValue, newValue := d.GetChange(key)
-		if cond(ctx, oldValue, newValue, meta) {
+		old, new := d.GetChange(key)
+		if cond(ctx, old, new, meta) {
 			return f(ctx, d, meta)
 		}
 		return nil

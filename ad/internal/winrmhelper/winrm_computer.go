@@ -183,7 +183,10 @@ func (m *Computer) Update(conf *config.ProviderConf, changes map[string]interfac
 
 // Delete deletes an existing Computer objects from the AD tree
 func (m *Computer) Delete(conf *config.ProviderConf) error {
-	cmd := fmt.Sprintf("Remove-ADComputer -confirm:$false -Identity %q", m.GUID)
+	// Computer objects in AD can contain leaf objects and the Remove-ADComputer commandlet does not support deleting these.
+	// To be safe, we first try to get the computer using the Get-ADComputer commandlet, to make sure the GUID is actually a computer.
+	// We then pass the returned object to Remove-ADObject with the "-Recursive" switch, ensuring that all leaf objects are also deleted.
+	cmd := fmt.Sprintf("Get-ADComputer -Identity %q | Remove-ADObject -Recursive -confirm:$false", m.GUID)
 	conn, err := conf.AcquireWinRMClient()
 	if err != nil {
 		return fmt.Errorf("while acquiring winrm client: %s", err)
@@ -204,7 +207,7 @@ func (m *Computer) Delete(conf *config.ProviderConf) error {
 		return fmt.Errorf("winrm execution failure while removing computer object: %s", err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("Remove-ADComputer exited with a non zero exit code (%d), stderr: %s", result.ExitCode, result.StdErr)
+		return fmt.Errorf("Remove-ADObject exited with a non zero exit code (%d), stderr: %s", result.ExitCode, result.StdErr)
 	}
 	return nil
 }

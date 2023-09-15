@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package schema
 
 import (
@@ -70,7 +67,7 @@ func (r *DiffFieldReader) ReadField(address []string) (FieldReadResult, error) {
 	case TypeBool, TypeInt, TypeFloat, TypeString:
 		res, err = r.readPrimitive(address, schema)
 	case TypeList:
-		res, err = readListField(r, address)
+		res, err = readListField(r, address, schema)
 	case TypeMap:
 		res, err = r.readMap(address, schema)
 	case TypeSet:
@@ -131,7 +128,7 @@ func (r *DiffFieldReader) readMap(
 	key := address[len(address)-1]
 	err = mapValuesToPrimitive(key, result, schema)
 	if err != nil {
-		return FieldReadResult{}, nil //nolint:nilerr // Leave legacy flatmap handling
+		return FieldReadResult{}, nil
 	}
 
 	var resultVal interface{}
