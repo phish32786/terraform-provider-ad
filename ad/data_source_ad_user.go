@@ -60,7 +60,7 @@ func dataSourceADUser() *schema.Resource {
 				Computed:    true,
 				Description: "Description of the user object.",
 			},
-			"distinguishedName": {
+			"distinguishedname": {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "distinguishedName of the user object.",
