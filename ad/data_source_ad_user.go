@@ -63,7 +63,7 @@ func dataSourceADUser() *schema.Resource {
 			"distinguishedname": {
 				Type:        schema.TypeString,
 				Computed:    true,
-				Description: "distinguishedName of the user object.",
+				Description: "DistinguishedName of the user object.",
 			},
 			"division": {
 				Type:        schema.TypeString,
@@ -213,7 +213,7 @@ func dataSourceADUserRead(d *schema.ResourceData, meta interface{}) error {
 	_ = d.Set("country", u.Country)
 	_ = d.Set("department", u.Department)
 	_ = d.Set("description", u.Description)
-	_ = d.Set("distinguishedName", u.DistinguishedName)
+	_ = d.Set("distinguishedname", u.DistinguishedName)
 	_ = d.Set("division", u.Division)
 	_ = d.Set("email_address", u.EmailAddress)
 	_ = d.Set("employee_id", u.EmployeeID)
